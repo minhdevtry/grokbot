@@ -71,10 +71,12 @@ export async function fetchSandPrivacyMode(options: PrivacyLookupOptions, client
 let cachedPrivacyMode: { backendUrl: string; accountScope: string; value: Promise<PrivacyMode | undefined>; expiresAt?: number } | undefined;
 
 export async function settlePrivacyMode(fetchPrivacyMode: PrivacyModeFetcher, options: PrivacyLookupOptions, log: (message: string) => void = console.info): Promise<PrivacyMode | undefined> {
+  if (process.env.SAND_REQUIRE_CURSOR_AUTH !== "1") return PrivacyMode.NO_STORAGE;
   try { return await fetchPrivacyMode(options); }
   catch (error) { const label = error instanceof Error ? error.name : typeof error; log(`[sand:privacy] privacy-mode lookup failed, using privacy-safe fallback backend=${options.backendUrl} error=${label}`); return undefined; }
 }
 export async function resolveCachedSandPrivacyMode(options: PrivacyLookupOptions, fetchPrivacyMode: PrivacyModeFetcher, now = Date.now, log?: (message: string) => void): Promise<PrivacyMode | undefined> {
+  if (process.env.SAND_REQUIRE_CURSOR_AUTH !== "1") return PrivacyMode.NO_STORAGE;
   const accountScope = accountCacheScope(options.accessToken);
   const cached = cachedPrivacyMode;
   if (cached?.backendUrl === options.backendUrl && cached.accountScope === accountScope && (cached.expiresAt === undefined || now() <= cached.expiresAt)) return await cached.value;
@@ -90,6 +92,7 @@ export function clearSandPrivacyModeCacheForTesting(): void { cachedPrivacyMode 
 
 export async function resolveSandPrivacyMode(options: PrivacyLookupOptions, fetchPrivacyMode: PrivacyModeFetcher = fetchSandPrivacyMode): Promise<PrivacyMode | undefined> { return await resolveCachedSandPrivacyMode(options, fetchPrivacyMode); }
 export async function resolveSandRunPrivacyMode(options: { readonly getAccessToken: (options: { backendUrl: string }) => Promise<string>; readonly getMachineId: () => Promise<string> | string; readonly backendUrl?: string }, fetchPrivacyMode: PrivacyModeFetcher = fetchSandPrivacyMode): Promise<PrivacyMode> {
+  if (process.env.SAND_REQUIRE_CURSOR_AUTH !== "1") return PrivacyMode.NO_STORAGE;
   try {
     const backendUrl = options.backendUrl ?? getConfiguredBackendUrl();
     const [accessToken, machineId] = await Promise.all([options.getAccessToken({ backendUrl }), options.getMachineId()]);

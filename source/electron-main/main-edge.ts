@@ -122,7 +122,7 @@ export function createMainEdgeHandlers(deps: MainEdgeDeps): HandlerMap {
     getEgressTunnelStatus: () => invoke(egressController(deps), "getStatus"),
     getWebauthnProxyEnabled: () => invoke(deps.boxToggleStore, "getWebauthnProxyEnabled"),
     setWebauthnProxyEnabled: async (raw) => { const enabled = req(raw).enabled === true; invoke(deps.boxToggleStore, "setWebauthnProxyEnabled", enabled); deps.emitWebauthnProxyChanged(enabled); const mirrored = sandWebauthnProxyMirroredEnablement(enabled, deps.platform); for (let attempt = 0; attempt < 3; attempt += 1) { const applied = await deps.syncHostSettingsToBox({ webauthnProxyEnabled: mirrored }); if (applied?.webauthnProxyEnabled === mirrored) break; await (deps.delay ?? sleep)(250 * (attempt + 1)); } return invoke(deps.boxToggleStore, "getWebauthnProxyEnabled"); },
-    getOnboardingSeen: async () => await Promise.resolve(invoke(deps.onboardingSeen, "reconcile")) === true,
+    getOnboardingSeen: async () => process.env.SAND_REQUIRE_CURSOR_AUTH !== "1" ? true : await Promise.resolve(invoke(deps.onboardingSeen, "reconcile")) === true,
     setOnboardingSeen: (raw) => { const seen = req(raw).seen; if (typeof seen === "boolean") void Promise.resolve(invoke(deps.onboardingSeen, "apply", seen)); },
 
     openExternal: (raw) => invoke(deps.shell, "openExternalUrl", req(raw).url),
