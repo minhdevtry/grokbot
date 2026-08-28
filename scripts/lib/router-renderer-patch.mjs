@@ -40,6 +40,10 @@ const SHELL_ROUTER_BEFORE = 'children:e==="onboarding"?p.jsx(eDn,{onComplete:s,p
 const SHELL_ROUTER_AFTER = 'children:p.jsx(Gzn,{})';
 const ACCESS_COVER_BEFORE = 'function czn(n,e,t,s){return n?.code===Cj&&!e&&!t&&!s}';
 const ACCESS_COVER_AFTER = 'function czn(n,e,t,s){return!1}';
+const COMPUTER_SETUP_BEFORE = '!ce&&kl&&!at?';
+const COMPUTER_SETUP_AFTER = 'false?';
+const ROSTER_GATE_BEFORE = 't.status==="ready"&&(e.accountSlot==null||s.loadState!=="loading"||s.isShowingRestoredRoster)?n.children:t.status==="failed"?p.jsx(Kzn,{}):t.status==="ready"?p.jsx(C0t,{}):null';
+const ROSTER_GATE_AFTER = 't.status==="ready"?n.children:t.status==="failed"?p.jsx(Kzn,{}):null';
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -72,6 +76,12 @@ export function patchOriginalAccessCoverBypass(source) {
   return replaceExactlyOnce(source, ACCESS_COVER_BEFORE, ACCESS_COVER_AFTER, "access cover bypass");
 }
 
+export function patchOriginalComputerSetupBypass(source) {
+  let patched = replaceExactlyOnce(source, COMPUTER_SETUP_BEFORE, COMPUTER_SETUP_AFTER, "computer setup gate bypass");
+  patched = replaceExactlyOnce(patched, ROSTER_GATE_BEFORE, ROSTER_GATE_AFTER, "roster ready gate bypass");
+  return patched;
+}
+
 export async function applyOriginalRendererRouterPatch({ stageRoot }) {
   const assetsRoot = path.join(stageRoot, "dist", "renderer", "assets");
   const registryCandidates = [];
@@ -86,7 +96,9 @@ export async function applyOriginalRendererRouterPatch({ stageRoot }) {
     if (
       source.includes(ONBOARDING_GATE_BEFORE) &&
       source.includes(SHELL_ROUTER_BEFORE) &&
-      source.includes(ACCESS_COVER_BEFORE)
+      source.includes(ACCESS_COVER_BEFORE) &&
+      source.includes(COMPUTER_SETUP_BEFORE) &&
+      source.includes(ROSTER_GATE_BEFORE)
     ) {
       onboardingCandidates.push({ name, target, source });
     }
@@ -106,6 +118,7 @@ export async function applyOriginalRendererRouterPatch({ stageRoot }) {
   applyTransform(panelCandidates[0], patchOriginalSettingsPanel);
   applyTransform(onboardingCandidates[0], patchOriginalOnboardingBypass);
   applyTransform(onboardingCandidates[0], patchOriginalAccessCoverBypass);
+  applyTransform(onboardingCandidates[0], patchOriginalComputerSetupBypass);
 
   const changes = [];
   for (const [targetPath, patchedContent] of modified) {
@@ -124,8 +137,8 @@ export async function applyOriginalRendererRouterPatch({ stageRoot }) {
     schemaVersion: 1,
     mode: "original-renderer-settings-extension",
     chunks: changes,
-    features: ["settings-router-provider", "settings-local-docker-vm", "usage-current-provider", "bypass-onboarding-loop", "bypass-access-cover"],
-    transformations: ["settings-registry", "router-panel", "usage-panel", "onboarding-bypass", "access-cover-bypass"],
+    features: ["settings-router-provider", "settings-local-docker-vm", "usage-current-provider", "bypass-onboarding-loop", "bypass-access-cover", "bypass-computer-setup"],
+    transformations: ["settings-registry", "router-panel", "usage-panel", "onboarding-bypass", "access-cover-bypass", "computer-setup-bypass"],
   };
   const provenancePath = path.join(stageRoot, "dist", "renderer-router-extension.json");
   await writeFile(provenancePath, `${JSON.stringify(record, null, 2)}\n`);
