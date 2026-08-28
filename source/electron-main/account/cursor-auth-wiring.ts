@@ -154,8 +154,8 @@ export function createCursorAccountEdgePort(deps: {
   const withService = async <T>(operation: (service: AuthServicePort) => Promise<T>): Promise<T> => await operation(await deps.ensureCursorAuthService());
   const tokenReader = (service: AuthServicePort): AccessTokenReader => (options) => service.getValidAccessToken(options);
   return {
-    getSandAccess: async () => await (await ensureSandAccessReader()).read(),
-    getSandAccessFresh: async () => (await readSandAccessOnce(await sandAccessDeps())).access,
+    getSandAccess: async () => process.env.SAND_REQUIRE_CURSOR_AUTH !== "1" ? { state: "granted", reason: "none" } : await (await ensureSandAccessReader()).read(),
+    getSandAccessFresh: async () => process.env.SAND_REQUIRE_CURSOR_AUTH !== "1" ? { state: "granted", reason: "none" } : (await readSandAccessOnce(await sandAccessDeps())).access,
     getAuthStatus: async () => { const freshness = deps.currentAuthStatusFreshness(); const service = await deps.ensureCursorAuthService(); return { ...await settledStatus(() => service.getStatus()), freshness }; },
     login: async () => withService(async (service) => { const result = await service.login(); const settled = await deps.getAccountRuntime()?.whenIdle(); await deps.resetMcpManager(); await deps.refreshHostMcp(); return settled ?? result; }),
     cancelLogin: async () => withService(async (service) => { const result = await service.cancelLogin(); return await deps.getAccountRuntime()?.whenIdle() ?? result; }),
@@ -164,12 +164,12 @@ export function createCursorAccountEdgePort(deps: {
       if (typeof name !== "string" || name.length > 200) throw new Error("updateCursorAccountName requires a bounded name string.");
       return await withService(async (service) => { const result = await service.updateDisplayName(name); return await deps.getAccountRuntime()?.whenIdle() ?? result; });
     },
-    getAvatar: async () => withService(async (service) => { const status = await service.getStatus(); return status.kind !== "logged-in" || status.authId == null ? null : await deps.resolveAvatar(status.authId, status.profilePictureUrl); }),
-    getWeeklyUsage: async () => withService(async (service) => (await service.getStatus()).kind === "logged-in" ? await deps.fetchWeeklyUsage(tokenReader(service)) : null),
-    getUsageSummary: async () => !await deps.isUsagePageEnabled() ? null : await withService(async (service) => (await service.getStatus()).kind === "logged-in" ? await deps.fetchUsageSummary(tokenReader(service)) : null),
-    getPrReviewPreferences: async () => withService(async (service) => (await service.getStatus()).kind === "logged-in" ? await deps.fetchPrReviewPreferences(tokenReader(service)) : NO_SAND_PR_REVIEW_PREFERENCES),
-    getPrivacyModeEnabled: async () => withService(async (service) => (await service.getStatus()).kind === "logged-in" ? await deps.fetchPrivacyModeEnabled(tokenReader(service)) : true),
-    cancelTrial: async () => !await deps.isUsagePageEnabled() ? { ok: false, message: "This isn’t available right now" } : await withService(async (service) => (await service.getStatus()).kind === "logged-in" ? await deps.cancelTrial(tokenReader(service)) : { ok: false, message: "Sign in to Cursor to continue" }),
+    getAvatar: async () => null,
+    getWeeklyUsage: async () => null,
+    getUsageSummary: async () => null,
+    getPrReviewPreferences: async () => NO_SAND_PR_REVIEW_PREFERENCES,
+    getPrivacyModeEnabled: async () => true,
+    cancelTrial: async () => ({ ok: false, message: "This isn’t available right now" }),
     invokeDashboardAction: async (raw: unknown) => {
       const request = parseDashboardActionRequest(raw);
       if (request == null) return { ok: false, message: `This action isn’t supported by this version of ${deps.productDisplayName ?? "Grok Bot"}` };

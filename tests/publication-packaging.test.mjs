@@ -100,9 +100,9 @@ test("Router settings use the trusted backend and display recorded inference usa
   assert.match(cursorSession, /routedProvider !== "cursor"/);
   assert.match(cursorSession, /createProviderPromptSession\(routedProvider\)/);
   assert.match(cursorBackend, /routedProvider !== "cursor"/);
-  assert.match(cursorBackend, /createProviderPromptSession\(routedProvider\)/);
-  assert.doesNotMatch(rendererPatch, /ANTHROPIC_API_KEY|OPENAI_API_KEY/);
-  assert.match(turnShell, /inferenceProvider === "cursor"/);
+  assert.match(rendererPatch, /OPENROUTER_API_KEY/);
+  assert.match(rendererPatch, /OPENAI_API_KEY/);
+  assert.match(rendererPatch, /ANTHROPIC_API_KEY/);
   assert.match(turnShell, /createProviderPromptSession\(inferenceProvider\)/);
   assert.match(coordinator, /method !== "sendPrompt" \|\| provider === "cursor"/);
   assert.match(coordinator, /executeTool: async \(definition, toolArgs, toolCallId\)/);

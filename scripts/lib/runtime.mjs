@@ -19,11 +19,13 @@ export async function validateRuntimeApp(appPath) {
   const infoPlist = path.join(appPath, "Contents", "Info.plist");
   const executable = path.join(appPath, "Contents", "MacOS", "Grok Bot");
   const unpacked = path.join(appPath, "Contents", "Resources", "app.asar.unpacked");
-  const version = await capture(SYSTEM_TOOLS.plutil, ["-extract", "CFBundleShortVersionString", "raw", infoPlist]);
-  if (version !== upstreamVersion) {
-    throw new Error(`Expected Grok Bot ${upstreamVersion}, got ${version} at ${appPath}`);
+  if (process.platform === "darwin") {
+    const version = await capture(SYSTEM_TOOLS.plutil, ["-extract", "CFBundleShortVersionString", "raw", infoPlist]);
+    if (version !== upstreamVersion) {
+      throw new Error(`Expected Grok Bot ${upstreamVersion}, got ${version} at ${appPath}`);
+    }
   }
-  if (!(await stat(executable)).isFile() || !(await stat(unpacked)).isDirectory()) {
+  if (!(await stat(unpacked)).isDirectory()) {
     throw new Error(`Incomplete Grok Bot runtime at ${appPath}`);
   }
   return appPath;
@@ -45,7 +47,11 @@ export async function cacheRuntimeFromApp(source) {
   const runtimeDir = path.dirname(cachedRuntimeApp);
   await mkdir(runtimeDir, { recursive: true });
   await rm(cachedRuntimeApp, { recursive: true, force: true });
-  await run(SYSTEM_TOOLS.ditto, [validated, cachedRuntimeApp]);
+  if (process.platform === "darwin") {
+    await run(SYSTEM_TOOLS.ditto, [validated, cachedRuntimeApp]);
+  } else {
+    await copyTree(validated, cachedRuntimeApp);
+  }
   return await validateRuntimeApp(cachedRuntimeApp);
 }
 

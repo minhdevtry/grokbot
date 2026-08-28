@@ -411,7 +411,7 @@ export function createProductionNotificationsBinding(
 ): NotificationsBinding {
   requireFunction(ports?.Notification, "electron.Notification constructor.");
   requireFunction(ports?.Notification?.isSupported, "electron.Notification.isSupported().");
-  requireFunction(ports?.app?.setBadgeCount, "electron.app.setBadgeCount().");
+  const setBadgeCount = typeof ports?.app?.setBadgeCount === "function" ? ports.app.setBadgeCount.bind(ports.app) : () => false;
   let created = false;
   return {
     create(context) {
@@ -424,7 +424,7 @@ export function createProductionNotificationsBinding(
         openAgent: (agentId) => context.requireMainEdge().emit("focus-agent", { id: agentId }),
       });
       const dockBadge = new SandDockBadgeManager({
-        setBadgeCount: (count) => { ports.app.setBadgeCount(count); },
+        setBadgeCount: (count) => { setBadgeCount(count); },
         reportFailure: (operation, error) => reportDesktopEdgeFailure("dock-badge", operation, error),
       });
       const feed = createAgentsControlFeed({ osNotifications, dockBadge });
@@ -464,18 +464,34 @@ export function createElectronProductionNotificationsBinding(): NotificationsBin
 export function createProductionStartupBinding(
   ports: ElectronStartupProviderPorts,
 ): ElectronProductionStartupBindings {
-  for (const [value, label] of [
-    [ports?.app?.setPath, "electron.app.setPath()."],
-    [ports?.app?.getPath, "electron.app.getPath()."],
-    [ports?.app?.isInApplicationsFolder, "electron.app.isInApplicationsFolder()."],
-    [ports?.app?.moveToApplicationsFolder, "electron.app.moveToApplicationsFolder()."],
-    [ports?.app?.relaunch, "electron.app.relaunch()."],
-    [ports?.app?.exit, "electron.app.exit()."],
-    [ports?.dialog?.showMessageBox, "electron.dialog.showMessageBox()."],
-  ] as const) requireFunction(value, label);
+  const platform = ports.platform ?? process.platform;
+  const isDarwin = platform === "darwin";
+  requireFunction(ports?.app?.setPath, "electron.app.setPath().");
+  requireFunction(ports?.app?.getPath, "electron.app.getPath().");
+  if (isDarwin) {
+    requireFunction(ports?.app?.isInApplicationsFolder, "electron.app.isInApplicationsFolder().");
+    requireFunction(ports?.app?.moveToApplicationsFolder, "electron.app.moveToApplicationsFolder().");
+  }
+  requireFunction(ports?.app?.relaunch, "electron.app.relaunch().");
+  requireFunction(ports?.app?.exit, "electron.app.exit().");
+  requireFunction(ports?.dialog?.showMessageBox, "electron.dialog.showMessageBox().");
+  const effectiveApp: typeof ports.app = new Proxy(ports.app, {
+    get(target, prop) {
+      if (prop === "isInApplicationsFolder" && typeof (target as any).isInApplicationsFolder !== "function") {
+        return () => true;
+      }
+      if (prop === "moveToApplicationsFolder" && typeof (target as any).moveToApplicationsFolder !== "function") {
+        return () => false;
+      }
+      const val = (target as any)[prop];
+      if (typeof val === "function") {
+        return val.bind(target);
+      }
+      return val;
+    },
+  });
   const argv = ports.argv ?? process.argv;
   const env = ports.env ?? process.env;
-  const platform = ports.platform ?? process.platform;
   const buffered: Array<{ readonly level: Parameters<ProductionTelemetrySink["reportDesktopStartup"]>[0]; readonly metadata: Parameters<ProductionTelemetrySink["reportDesktopStartup"]>[1] }> = [];
   let telemetry: ProductionTelemetrySink | undefined;
   const report: ElectronProductionStartupBindings["report"] = (level, metadata) => {
@@ -489,7 +505,7 @@ export function createProductionStartupBinding(
   return {
     bootstrapUserData: ({ isLabBuild, env: bootstrapEnv }) => bootstrapDesktopUserData({
       isLabBuild,
-      app: ports.app,
+      app: effectiveApp,
       argv,
       env: bootstrapEnv,
       platform,
@@ -500,7 +516,7 @@ export function createProductionStartupBinding(
       isPrimaryInstance,
       isLabBuild,
       hasIsolatedUserData,
-      app: ports.app,
+      app: effectiveApp,
       env: bootstrapEnv,
       ...(ports.homeDir === undefined ? {} : { homeDir: ports.homeDir }),
       reportFailureClass: reportDesktopEdgeFailureClass,
@@ -509,7 +525,7 @@ export function createProductionStartupBinding(
       platform,
       argv,
       env,
-      app: ports.app,
+      app: effectiveApp,
       dialog: ports.dialog,
       readDiscovery: ports.readDiscovery ?? (() => readLocalExecDaemonDiscovery()),
       isDaemonProcess: ports.isDaemonProcess ?? ((pid, discovery) => isLocalExecDaemonProcess(pid, discovery.entryRealpath, discovery.generationToken)),

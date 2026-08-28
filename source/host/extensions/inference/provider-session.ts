@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { query as queryClaude, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { jsonSchema, streamText, tool, type CoreMessage, type LanguageModelV1, type ToolSet } from "ai";
 
 import { BasePromptBuilder, BasePromptExecutor } from "../../../packages/chat-inference/base.js";
@@ -244,6 +245,43 @@ function toToolSet(definitions: readonly Loose[] | undefined, executeTool?: Rout
   return Object.keys(tools).length === 0 ? undefined : tools;
 }
 
+function openaiCompatibleCredential(): { baseURL: string; apiKey: string; modelId: string } {
+  const secrets = persistedSecrets();
+  const baseURL = process.env.SAND_OPENAI_BASE_URL?.trim() || process.env.OPENAI_BASE_URL?.trim() || process.env.OPENAI_API_BASE_URL?.trim() || secrets.OPENAI_BASE_URL?.trim() || "http://localhost:11434/v1";
+  const apiKey = process.env.SAND_OPENAI_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || secrets.OPENAI_API_KEY?.trim() || "local";
+  const modelId = process.env.SAND_OPENAI_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || secrets.OPENAI_MODEL?.trim() || "llama3.2";
+  return { baseURL, apiKey, modelId };
+}
+
+function anthropicCompatibleCredential(): { baseURL?: string | undefined; apiKey: string; modelId: string } {
+  const secrets = persistedSecrets();
+  const baseURL = process.env.SAND_ANTHROPIC_BASE_URL?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || secrets.ANTHROPIC_BASE_URL?.trim() || undefined;
+  const apiKey = process.env.SAND_ANTHROPIC_API_KEY?.trim() || process.env.ANTHROPIC_API_KEY?.trim() || secrets.ANTHROPIC_API_KEY?.trim() || "local";
+  const modelId = process.env.SAND_ANTHROPIC_MODEL?.trim() || process.env.ANTHROPIC_MODEL?.trim() || secrets.ANTHROPIC_MODEL?.trim() || "claude-3-7-sonnet-20250219";
+  return { ...(baseURL == null ? {} : { baseURL }), apiKey, modelId };
+}
+
+function openaiCompatibleExecutor(messages: readonly ProviderMessage[], invocationId: string, definitions?: readonly Loose[], executeTool?: RoutedToolExecutor, onUsage?: (usage: UsageRecord) => void) {
+  const { baseURL, apiKey, modelId } = openaiCompatibleCredential();
+  const model: LanguageModelV1 = createOpenAI({ apiKey, baseURL, compatibility: "compatible", name: "openai-compatible" }).chat(modelId as any);
+  const tools = toToolSet(definitions, executeTool);
+  const result = streamText({ model, system: GROK_ROUTER_SYSTEM_PROMPT, messages: messages as CoreMessage[], ...(tools === undefined ? {} : { tools }), toolCallStreaming: true, maxSteps: tools === undefined ? 1 : 8 });
+  const extendedUsage = result.usage.then(value => ({ inputTokens: value.promptTokens, outputTokens: value.completionTokens, cacheReadTokens: 0, cacheWriteTokens: 0, maxTokens: 0 }));
+  if (onUsage != null) void extendedUsage.then(onUsage);
+  return { fullStream: result.fullStream, response: result.response, usage: result.usage, extendedUsage, providerMetadata: result.providerMetadata, invocationId: Promise.resolve(invocationId) };
+}
+
+function anthropicCompatibleExecutor(messages: readonly ProviderMessage[], invocationId: string, definitions?: readonly Loose[], executeTool?: RoutedToolExecutor, onUsage?: (usage: UsageRecord) => void) {
+  const { baseURL, apiKey, modelId } = anthropicCompatibleCredential();
+  const anthropicProvider = createAnthropic({ apiKey, ...(baseURL == null ? {} : { baseURL }) });
+  const model: any = anthropicProvider(modelId as any);
+  const tools = toToolSet(definitions, executeTool);
+  const result = streamText({ model, system: GROK_ROUTER_SYSTEM_PROMPT, messages: messages as CoreMessage[], ...(tools === undefined ? {} : { tools }), toolCallStreaming: true, maxSteps: tools === undefined ? 1 : 8 });
+  const extendedUsage = result.usage.then(value => ({ inputTokens: value.promptTokens, outputTokens: value.completionTokens, cacheReadTokens: 0, cacheWriteTokens: 0, maxTokens: 0 }));
+  if (onUsage != null) void extendedUsage.then(onUsage);
+  return { fullStream: result.fullStream, response: result.response, usage: result.usage, extendedUsage, providerMetadata: result.providerMetadata, invocationId: Promise.resolve(invocationId) };
+}
+
 function openRouterExecutor(messages: readonly ProviderMessage[], invocationId: string, definitions?: readonly Loose[], executeTool?: RoutedToolExecutor, onUsage?: (usage: UsageRecord) => void) {
   const id = process.env.SAND_OPENROUTER_MODEL?.trim() || "openai/gpt-5.2";
   const model: LanguageModelV1 = createOpenAI({ apiKey: openRouterCredential(), baseURL: "https://openrouter.ai/api/v1", compatibility: "compatible", name: "openrouter", headers: { "HTTP-Referer": "https://github.com/grok-bot-reconstructed", "X-Title": "Grok Bot Reconstructed" } }).chat(id as any);
@@ -259,12 +297,22 @@ class ProviderPromptExecutor extends BasePromptExecutor<ProviderMessage> {
   stream(_ctx: unknown, invocationId = crypto.randomUUID(), definitions?: readonly Loose[]) {
     if (this.provider === "codex") return codexExecutor(this.getMessages(), invocationId, definitions, undefined, this.onUsage);
     if (this.provider === "claude-code") return claudeExecutor(this.getMessages(), invocationId, this.onUsage);
+    if (this.provider === "openai-compatible") return openaiCompatibleExecutor(this.getMessages(), invocationId, definitions, undefined, this.onUsage);
+    if (this.provider === "anthropic-compatible") return anthropicCompatibleExecutor(this.getMessages(), invocationId, definitions, undefined, this.onUsage);
     return openRouterExecutor(this.getMessages(), invocationId, definitions, undefined, this.onUsage);
   }
 }
 
 export function createProviderPromptSession(provider: RoutedProvider): { getModelId(): string; getExecutor(state?: unknown): PromptExecutor } {
-  const modelId = provider === "codex" ? configuredCodexModel() : provider === "claude-code" ? "claude-code" : process.env.SAND_OPENROUTER_MODEL?.trim() || "openai/gpt-5.2";
+  const modelId = provider === "codex"
+    ? configuredCodexModel()
+    : provider === "claude-code"
+      ? "claude-code"
+      : provider === "openai-compatible"
+        ? openaiCompatibleCredential().modelId
+        : provider === "anthropic-compatible"
+          ? anthropicCompatibleCredential().modelId
+          : process.env.SAND_OPENROUTER_MODEL?.trim() || "openai/gpt-5.2";
   return { getModelId: () => modelId, getExecutor: state => new ProviderPromptExecutor(provider, Array.isArray(state) ? state as ProviderMessage[] : undefined, usage => recordRoutedUsage(provider, usage)) };
 }
 
@@ -280,7 +328,11 @@ export async function runRoutedProviderText(provider: RoutedProvider, messages: 
     ? codexExecutor(messages, invocationId, options?.tools, options?.executeTool, onUsage)
     : provider === "claude-code"
       ? claudeExecutor(messages, invocationId, onUsage, options?.mcpServerUrl)
-      : openRouterExecutor(messages, invocationId, options?.tools, options?.executeTool, onUsage);
+      : provider === "openai-compatible"
+        ? openaiCompatibleExecutor(messages, invocationId, options?.tools, options?.executeTool, onUsage)
+        : provider === "anthropic-compatible"
+          ? anthropicCompatibleExecutor(messages, invocationId, options?.tools, options?.executeTool, onUsage)
+          : openRouterExecutor(messages, invocationId, options?.tools, options?.executeTool, onUsage);
   let text = "";
   for await (const event of result.fullStream) {
     if (event.type === "text-delta" && typeof event.textDelta === "string") {

@@ -5,10 +5,22 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
-import { archivedDmg, cachedDmg, cachedRuntimeApp, dmgSha256, dmgUrl } from "./lib/config.mjs";
+import { spawn } from "node:child_process";
+import {
+  archivedDmg,
+  cachedDmg,
+  cachedRuntimeApp,
+  dmgSha256,
+  dmgUrl,
+  repoRoot
+} from "./lib/config.mjs";
 import { run } from "./lib/process.mjs";
 import { cacheRuntimeFromApp, hydrateSourcePayloadFromRuntime, validateRuntimeApp } from "./lib/runtime.mjs";
 import { SYSTEM_TOOLS } from "./lib/system-tools.mjs";
+
+const cachedExe = path.join(repoRoot, ".cache/downloads/Grok_Bot_0.18.0_Setup.exe");
+const archivedExe = path.join(repoRoot, "research-archives/original/0.18.0/windows-x64/Grok_Bot_0.18.0_Setup.exe");
+const exeSha256 = "464079a15ef5fa8b61ccea8fffcc78f63cfcf6df65fb0ad5e725d8b95f7e437e";
 
 async function exists(target) {
   try {
@@ -23,6 +35,26 @@ async function sha256(target) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(target)) hash.update(chunk);
   return hash.digest("hex");
+}
+
+async function fetchFromGitLfs(oid, size) {
+  const res = await fetch("https://github.com/b-nnett/grok-bot-0.18-reconstructed.git/info/lfs/objects/batch", {
+    method: "POST",
+    headers: {
+      "Accept": "application/vnd.git-lfs+json",
+      "Content-Type": "application/vnd.git-lfs+json"
+    },
+    body: JSON.stringify({
+      operation: "download",
+      transfers: ["basic"],
+      objects: [{ oid, size }]
+    })
+  });
+  if (!res.ok) throw new Error(`LFS batch request failed: HTTP ${res.status}`);
+  const data = await res.json();
+  const action = data.objects?.[0]?.actions?.download;
+  if (!action?.href) throw new Error("No download action found in LFS response");
+  return action.href;
 }
 
 async function downloadDmg() {
@@ -44,7 +76,11 @@ async function downloadDmg() {
   }
 
   console.log(`Downloading ${dmgUrl}`);
-  const response = await fetch(dmgUrl, { redirect: "follow" });
+  let response = await fetch(dmgUrl, { redirect: "follow" }).catch(() => null);
+  if (!response || !response.ok || response.body == null) {
+    const lfsUrl = await fetchFromGitLfs(dmgSha256, 155793020);
+    response = await fetch(lfsUrl);
+  }
   if (!response.ok || response.body == null) {
     throw new Error(`Download failed: HTTP ${response.status}`);
   }
@@ -59,16 +95,77 @@ async function downloadDmg() {
   await rename(partial, cachedDmg);
 }
 
+async function downloadExe() {
+  await mkdir(path.dirname(cachedExe), { recursive: true });
+  if (await exists(cachedExe)) {
+    const digest = await sha256(cachedExe);
+    if (digest === exeSha256) return;
+    await rm(cachedExe, { force: true });
+  }
+
+  if (await exists(archivedExe)) {
+    const archivedDigest = await sha256(archivedExe);
+    if (archivedDigest === exeSha256) {
+      console.log(`Using archived release ${archivedExe}`);
+      await copyFile(archivedExe, cachedExe);
+      return;
+    }
+  }
+
+  console.log("Downloading Windows Setup.exe...");
+  let response = await fetch("https://downloads.cursor.com/grokbot/stable/win32-x64/0.18.0/Grok_Bot_0.18.0_Setup.exe", { redirect: "follow" }).catch(() => null);
+  if (!response || !response.ok || response.body == null) {
+    const lfsUrl = await fetchFromGitLfs(exeSha256, 125825552);
+    response = await fetch(lfsUrl);
+  }
+  if (!response.ok || response.body == null) {
+    throw new Error(`Download failed: HTTP ${response.status}`);
+  }
+  const partial = `${cachedExe}.partial`;
+  await rm(partial, { force: true });
+  await pipeline(Readable.fromWeb(response.body), createWriteStream(partial, { mode: 0o600 }));
+  const digest = await sha256(partial);
+  if (digest !== exeSha256) {
+    await rm(partial, { force: true });
+    throw new Error(`Checksum mismatch: expected ${exeSha256}, got ${digest}`);
+  }
+  await rename(partial, cachedExe);
+}
+
 async function extractRuntime() {
-  const mountRoot = await mkdtemp(path.join(tmpdir(), "grok-bot-018-mount-"));
-  let attached = false;
-  try {
-    await run(SYSTEM_TOOLS.hdiutil, ["attach", "-readonly", "-nobrowse", "-mountpoint", mountRoot, cachedDmg]);
-    attached = true;
-    await cacheRuntimeFromApp(path.join(mountRoot, "Grok Bot.app"));
-  } finally {
-    if (attached) await run(SYSTEM_TOOLS.hdiutil, ["detach", mountRoot]);
-    await rm(mountRoot, { recursive: true, force: true });
+  if (process.platform === "darwin") {
+    const mountRoot = await mkdtemp(path.join(tmpdir(), "grok-bot-018-mount-"));
+    let attached = false;
+    try {
+      await run(SYSTEM_TOOLS.hdiutil, ["attach", "-readonly", "-nobrowse", "-mountpoint", mountRoot, cachedDmg]);
+      attached = true;
+      await cacheRuntimeFromApp(path.join(mountRoot, "Grok Bot.app"));
+    } finally {
+      if (attached) await run(SYSTEM_TOOLS.hdiutil, ["detach", mountRoot]);
+      await rm(mountRoot, { recursive: true, force: true });
+    }
+  } else {
+    // Linux / Windows: extract using 7za
+    console.log("Extracting runtime using 7za for Linux...");
+    const { path7za } = await import("7zip-bin");
+    const extractedDir = path.join(repoRoot, ".cache/extracted");
+    await rm(extractedDir, { recursive: true, force: true });
+    await mkdir(extractedDir, { recursive: true });
+
+    await new Promise((resolve, reject) => {
+      const child = spawn(path7za, ["x", "-y", cachedExe, `-o${extractedDir}`, "resources/*"], { stdio: "inherit" });
+      child.on("exit", code => code === 0 ? resolve() : reject(new Error(`7za exited with code ${code}`)));
+      child.on("error", reject);
+    });
+
+    const resourcesDir = path.join(cachedRuntimeApp, "Contents", "Resources");
+    await mkdir(resourcesDir, { recursive: true });
+    await copyFile(path.join(extractedDir, "resources", "app.asar"), path.join(resourcesDir, "app.asar"));
+    
+    const unpackedDest = path.join(resourcesDir, "app.asar.unpacked");
+    await rm(unpackedDest, { recursive: true, force: true });
+    const { cp } = await import("node:fs/promises");
+    await cp(path.join(extractedDir, "resources", "app.asar.unpacked"), unpackedDest, { recursive: true });
   }
 }
 
@@ -79,7 +176,11 @@ if (configuredApp) {
 } else if (await exists(cachedRuntimeApp)) {
   runtimeApp = await validateRuntimeApp(cachedRuntimeApp);
 } else {
-  await downloadDmg();
+  if (process.platform === "darwin") {
+    await downloadDmg();
+  } else {
+    await downloadExe();
+  }
   await extractRuntime();
   runtimeApp = await validateRuntimeApp(cachedRuntimeApp);
 }

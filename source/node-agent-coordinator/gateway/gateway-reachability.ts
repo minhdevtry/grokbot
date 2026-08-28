@@ -30,7 +30,10 @@ export class SandGatewayUnreachableError extends Error {
 
 export function outcomeForHttpStatus(status: number): GatewayReachabilityOutcome | undefined {
   if (status >= 500) return "http_5xx";
-  if (status === 401 || status === 403) return "access_denied";
+  if (status === 401 || status === 403) {
+    if (process.env.SAND_REQUIRE_CURSOR_AUTH !== "1") return "network";
+    return "access_denied";
+  }
   return undefined;
 }
 

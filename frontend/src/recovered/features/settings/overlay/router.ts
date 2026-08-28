@@ -1,6 +1,6 @@
 import type { AgentDesktopBridge } from "../../../contracts/desktop-bridge";
 
-export type RouterProviderId = "cursor" | "claude-code" | "codex" | "openrouter";
+export type RouterProviderId = "cursor" | "claude-code" | "codex" | "openrouter" | "openai-compatible" | "anthropic-compatible";
 
 export interface RouterProvider {
   readonly id: RouterProviderId;
@@ -40,6 +40,20 @@ export const ROUTER_PROVIDERS: readonly RouterProvider[] = [
     label: "OpenRouter",
     description: "Use models and billing from your OpenRouter account.",
     usageDescription: "OpenRouter usage and spend are managed in your OpenRouter account and are not exposed as an in-app meter.",
+    usageSource: "external"
+  },
+  {
+    id: "openai-compatible",
+    label: "OpenAI Compatible",
+    description: "Connect to local or custom OpenAI-compatible endpoint (Ollama, LMStudio, vLLM, DeepSeek).",
+    usageDescription: "Usage is managed by your local server or custom API provider.",
+    usageSource: "external"
+  },
+  {
+    id: "anthropic-compatible",
+    label: "Anthropic / Claude API",
+    description: "Connect directly to Anthropic API or custom Anthropic-compatible proxy.",
+    usageDescription: "Usage is managed by your Anthropic account.",
     usageSource: "external"
   }
 ];

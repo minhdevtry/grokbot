@@ -55,8 +55,8 @@ export class SandMcpCatalogFlow {
         this.core.getMachineId,
       );
     } catch (error) {
-      if (!usable) throw error;
-      return cached.views;
+      if (usable && cached != null) return cached.views;
+      return [];
     }
     this.catalog.clear();
     const views = listing.plugins

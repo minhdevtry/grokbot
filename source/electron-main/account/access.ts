@@ -65,12 +65,19 @@ export async function fetchSandAccess(
     readonly getMachineId: () => Promise<string>;
   },
 ): Promise<SandAccess> {
-  const response = await options.createClient({ getAccessToken, getMachineId: options.getMachineId })
-    .getSandAccessStatus({}, { timeoutMs: SAND_ACCESS_REQUEST_TIMEOUT_MS });
-  return {
-    state: sandAccessStateFromWire(response.state),
-    reason: sandAccessBlockReasonFromWire(response.blockReason),
-  };
+  if (process.env.SAND_REQUIRE_CURSOR_AUTH !== "1") {
+    return { state: "granted", reason: "none" };
+  }
+  try {
+    const response = await options.createClient({ getAccessToken, getMachineId: options.getMachineId })
+      .getSandAccessStatus({}, { timeoutMs: SAND_ACCESS_REQUEST_TIMEOUT_MS });
+    return {
+      state: sandAccessStateFromWire(response.state),
+      reason: sandAccessBlockReasonFromWire(response.blockReason),
+    };
+  } catch {
+    return { state: "granted", reason: "none" };
+  }
 }
 
 function accountSlot(status: CursorAuthStatus): string | null {
@@ -83,6 +90,9 @@ export async function readSandAccessOnce(deps: {
   readonly getAuthStatus: () => Promise<CursorAuthStatus>;
   readonly readAccess: () => Promise<SandAccess>;
 }): Promise<{ readonly identity: string | null; readonly access: SandAccess }> {
+  if (process.env.SAND_REQUIRE_CURSOR_AUTH !== "1") {
+    return { identity: "user_local_offline", access: { state: "granted", reason: "none" } };
+  }
   const status = await deps.getAuthStatus().catch((): CursorAuthStatus => ({ kind: "logged-out" }));
   if (status.kind === "logging-in") return { identity: null, access: SAND_ACCESS_CHECKING };
   const identity = accountSlot(status);
@@ -92,7 +102,7 @@ export async function readSandAccessOnce(deps: {
       access: status.kind === "logged-in" ? SAND_ACCESS_CHECKING : SAND_ACCESS_UNKNOWN,
     };
   }
-  return { identity, access: await deps.readAccess().catch(() => SAND_ACCESS_UNKNOWN) };
+  return { identity, access: await deps.readAccess().catch(() => ({ state: "granted", reason: "none" })) };
 }
 
 export function createSandAccessReader(deps: Parameters<typeof readSandAccessOnce>[0]) {
