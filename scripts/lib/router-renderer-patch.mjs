@@ -38,6 +38,8 @@ const ONBOARDING_GATE_BEFORE = 'async function hUn(n){';
 const ONBOARDING_GATE_AFTER = 'async function hUn(n){return{kind:"landed",gate:"shell",sessionFact:!0,provisional:!1};';
 const SHELL_ROUTER_BEFORE = 'children:e==="onboarding"?p.jsx(eDn,{onComplete:s,presentation:lzn},t):p.jsx(Gzn,{})';
 const SHELL_ROUTER_AFTER = 'children:p.jsx(Gzn,{})';
+const ACCESS_COVER_BEFORE = 'function czn(n,e,t,s){return n?.code===Cj&&!e&&!t&&!s}';
+const ACCESS_COVER_AFTER = 'function czn(n,e,t,s){return!1}';
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -66,6 +68,10 @@ export function patchOriginalOnboardingBypass(source) {
   return patched;
 }
 
+export function patchOriginalAccessCoverBypass(source) {
+  return replaceExactlyOnce(source, ACCESS_COVER_BEFORE, ACCESS_COVER_AFTER, "access cover bypass");
+}
+
 export async function applyOriginalRendererRouterPatch({ stageRoot }) {
   const assetsRoot = path.join(stageRoot, "dist", "renderer", "assets");
   const registryCandidates = [];
@@ -77,7 +83,13 @@ export async function applyOriginalRendererRouterPatch({ stageRoot }) {
     const source = await readFile(target, "utf8");
     if (source.includes(REGISTRY_BEFORE)) registryCandidates.push({ name, target, source });
     if (source.includes(COMPONENT_ANCHOR) && source.includes(GENERAL_BEFORE) && source.includes(USAGE_BEFORE)) panelCandidates.push({ name, target, source });
-    if (source.includes(ONBOARDING_GATE_BEFORE) && source.includes(SHELL_ROUTER_BEFORE)) onboardingCandidates.push({ name, target, source });
+    if (
+      source.includes(ONBOARDING_GATE_BEFORE) &&
+      source.includes(SHELL_ROUTER_BEFORE) &&
+      source.includes(ACCESS_COVER_BEFORE)
+    ) {
+      onboardingCandidates.push({ name, target, source });
+    }
   }
   if (registryCandidates.length !== 1 || panelCandidates.length !== 1 || onboardingCandidates.length !== 1) {
     throw new Error(`Expected one candidate each for registry (${registryCandidates.length}), panel (${panelCandidates.length}), and onboarding (${onboardingCandidates.length}).`);
@@ -93,6 +105,7 @@ export async function applyOriginalRendererRouterPatch({ stageRoot }) {
   applyTransform(registryCandidates[0], patchOriginalSettingsRegistry);
   applyTransform(panelCandidates[0], patchOriginalSettingsPanel);
   applyTransform(onboardingCandidates[0], patchOriginalOnboardingBypass);
+  applyTransform(onboardingCandidates[0], patchOriginalAccessCoverBypass);
 
   const changes = [];
   for (const [targetPath, patchedContent] of modified) {
@@ -111,8 +124,8 @@ export async function applyOriginalRendererRouterPatch({ stageRoot }) {
     schemaVersion: 1,
     mode: "original-renderer-settings-extension",
     chunks: changes,
-    features: ["settings-router-provider", "settings-local-docker-vm", "usage-current-provider", "bypass-onboarding-loop"],
-    transformations: ["settings-registry", "router-panel", "usage-panel", "onboarding-bypass"],
+    features: ["settings-router-provider", "settings-local-docker-vm", "usage-current-provider", "bypass-onboarding-loop", "bypass-access-cover"],
+    transformations: ["settings-registry", "router-panel", "usage-panel", "onboarding-bypass", "access-cover-bypass"],
   };
   const provenancePath = path.join(stageRoot, "dist", "renderer-router-extension.json");
   await writeFile(provenancePath, `${JSON.stringify(record, null, 2)}\n`);

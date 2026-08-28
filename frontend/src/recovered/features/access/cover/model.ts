@@ -127,6 +127,7 @@ export interface AccessCoverGateInput {
 
 // @evidence src/app/dist/renderer/assets/index-UbX-y3il.js#byteOffset=5543963
 export function shouldShowAccessCover(input: AccessCoverGateInput): boolean {
+  if (typeof process !== "undefined" && process.env?.SAND_REQUIRE_CURSOR_AUTH !== "1") return false;
   return input.rosterFailureCode === ACCESS_BLOCKED_FAILURE_CODE
     && !input.hasReachedBox
     && !input.isShowingRestoredRoster
