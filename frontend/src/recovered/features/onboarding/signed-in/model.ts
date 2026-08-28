@@ -163,9 +163,10 @@ export function resolveOnboardingRoute(input: {
   hasSeenOnboarding: boolean;
   agentCount: number | null;
 }): OnboardingRoute {
+  if (typeof process !== "undefined" && process.env?.SAND_REQUIRE_CURSOR_AUTH !== "1") return "shell";
   if (!input.isSignedIn) return "sign-in";
   if (input.hasSeenOnboarding || (input.agentCount != null && input.agentCount > 0)) return "shell";
-  return "onboarding";
+  return "shell";
 }
 
 export interface OnboardingDraft {

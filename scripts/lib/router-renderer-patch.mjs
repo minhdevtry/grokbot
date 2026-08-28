@@ -34,6 +34,11 @@ function RRouterUsageSummary({provider:s,usage:e,current:t,divided:n}){const r=[
 function RRouterUsage(){const[s]=RRouterState(),e=RRouterProviders.find(t=>t.value===s.provider)??RRouterProviders[0],t=RRouterProviders.filter(n=>n.value===s.provider||(s.usage?.providers?.[n.value]?.requests??0)>0);return a.jsxs("div",{className:k("sand-usage-section","sand-9f619 sand-78zum5 sand-dt5ytf sand-ou54vl"),children:[a.jsx(re,{title:"Current provider",children:a.jsx(ie,{description:e.description,label:e.label,variant:"card",children:a.jsx(se,{as:"span",color:"secondary",size:"sm",children:"Selected"})})}),a.jsx(re,{title:"Tracked activity",children:a.jsx("div",{children:t.map((n,r)=>a.jsx(RRouterUsageSummary,{provider:n,usage:s.usage?.providers?.[n.value]??RRouterEmptyUsage,current:n.value===s.provider,divided:r>0},n.value))})}),s.provider==="cursor"?a.jsx(Na,{}):null]})}
 `;
 
+const ONBOARDING_GATE_BEFORE = 'async function hUn(n){';
+const ONBOARDING_GATE_AFTER = 'async function hUn(n){return{kind:"landed",gate:"shell",sessionFact:!0,provisional:!1};';
+const SHELL_ROUTER_BEFORE = 'children:e==="onboarding"?p.jsx(eDn,{onComplete:s,presentation:lzn},t):p.jsx(Gzn,{})';
+const SHELL_ROUTER_AFTER = 'children:p.jsx(Gzn,{})';
+
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -55,40 +60,59 @@ export function patchOriginalSettingsPanel(source) {
   return patched;
 }
 
+export function patchOriginalOnboardingBypass(source) {
+  let patched = replaceExactlyOnce(source, ONBOARDING_GATE_BEFORE, ONBOARDING_GATE_AFTER, "onboarding gate bypass");
+  patched = replaceExactlyOnce(patched, SHELL_ROUTER_BEFORE, SHELL_ROUTER_AFTER, "shell router direct bypass");
+  return patched;
+}
+
 export async function applyOriginalRendererRouterPatch({ stageRoot }) {
   const assetsRoot = path.join(stageRoot, "dist", "renderer", "assets");
   const registryCandidates = [];
   const panelCandidates = [];
+  const onboardingCandidates = [];
   for (const name of await readdir(assetsRoot)) {
     if (!name.endsWith(".js")) continue;
     const target = path.join(assetsRoot, name);
     const source = await readFile(target, "utf8");
     if (source.includes(REGISTRY_BEFORE)) registryCandidates.push({ name, target, source });
     if (source.includes(COMPONENT_ANCHOR) && source.includes(GENERAL_BEFORE) && source.includes(USAGE_BEFORE)) panelCandidates.push({ name, target, source });
+    if (source.includes(ONBOARDING_GATE_BEFORE) && source.includes(SHELL_ROUTER_BEFORE)) onboardingCandidates.push({ name, target, source });
   }
-  if (registryCandidates.length !== 1 || panelCandidates.length !== 1) {
-    throw new Error(`Expected one original Settings registry and panel chunk, found ${registryCandidates.length}/${panelCandidates.length}.`);
+  if (registryCandidates.length !== 1 || panelCandidates.length !== 1 || onboardingCandidates.length !== 1) {
+    throw new Error(`Expected one candidate each for registry (${registryCandidates.length}), panel (${panelCandidates.length}), and onboarding (${onboardingCandidates.length}).`);
   }
+
+  const modified = new Map();
+  const applyTransform = (candidate, transform) => {
+    const current = modified.get(candidate.target) ?? candidate.source;
+    const patched = transform(current);
+    modified.set(candidate.target, patched);
+  };
+
+  applyTransform(registryCandidates[0], patchOriginalSettingsRegistry);
+  applyTransform(panelCandidates[0], patchOriginalSettingsPanel);
+  applyTransform(onboardingCandidates[0], patchOriginalOnboardingBypass);
+
   const changes = [];
-  for (const [role, candidate, transform] of [
-    ["registry", registryCandidates[0], patchOriginalSettingsRegistry],
-    ["panel", panelCandidates[0], patchOriginalSettingsPanel],
-  ]) {
-    const patched = transform(candidate.source);
-    await writeFile(candidate.target, patched);
+  for (const [targetPath, patchedContent] of modified) {
+    const relativePath = path.relative(stageRoot, targetPath).split(path.sep).join("/");
+    const originalSource = await readFile(targetPath, "utf8");
+    await writeFile(targetPath, patchedContent);
     changes.push({
-      role,
-      path: `dist/renderer/assets/${candidate.name}`,
-      original: { bytes: Buffer.byteLength(candidate.source), sha256: sha256(candidate.source) },
-      patched: { bytes: Buffer.byteLength(patched), sha256: sha256(patched) },
+      role: path.basename(targetPath),
+      path: relativePath,
+      original: { bytes: Buffer.byteLength(originalSource), sha256: sha256(originalSource) },
+      patched: { bytes: Buffer.byteLength(patchedContent), sha256: sha256(patchedContent) },
     });
   }
+
   const record = {
     schemaVersion: 1,
     mode: "original-renderer-settings-extension",
     chunks: changes,
-    features: ["settings-router-provider", "settings-local-docker-vm", "usage-current-provider"],
-    transformations: ["settings-registry", "router-panel", "usage-panel"],
+    features: ["settings-router-provider", "settings-local-docker-vm", "usage-current-provider", "bypass-onboarding-loop"],
+    transformations: ["settings-registry", "router-panel", "usage-panel", "onboarding-bypass"],
   };
   const provenancePath = path.join(stageRoot, "dist", "renderer-router-extension.json");
   await writeFile(provenancePath, `${JSON.stringify(record, null, 2)}\n`);
